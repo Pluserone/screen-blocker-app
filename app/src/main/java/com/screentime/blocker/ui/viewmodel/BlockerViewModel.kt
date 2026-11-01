@@ -3,7 +3,9 @@ package com.screentime.blocker.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.screentime.blocker.BlockerApp
 import com.screentime.blocker.data.local.*
+import com.screentime.blocker.service.BlockerForegroundService
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -94,6 +96,28 @@ class BlockerViewModel(private val dao: BlockerDao) : ViewModel() {
         viewModelScope.launch {
             val current = dao.getSettings(mode) ?: ModeSettingsEntity(mode = mode)
             dao.saveSettings(current.copy(isLockActive = active))
+            
+            val app = BlockerApp.instance
+            val soft = if (mode == BlockMode.SOFT) active else (dao.getSettings(BlockMode.SOFT)?.isLockActive == true)
+            val hard = if (mode == BlockMode.HARD) active else (dao.getSettings(BlockMode.HARD)?.isLockActive == true)
+            
+            val pkgs = mutableMapOf<String, String>()
+            val sites = mutableSetOf<String>()
+            if (soft) {
+                dao.getBlockedAppsList(BlockMode.SOFT).filter { it.isSelected }.forEach { pkgs[it.packageName] = it.appName }
+                dao.getBlockedSitesList(BlockMode.SOFT).forEach { sites.add(it.url) }
+            }
+            if (hard) {
+                dao.getBlockedAppsList(BlockMode.HARD).filter { it.isSelected }.forEach { pkgs[it.packageName] = it.appName }
+                dao.getBlockedSitesList(BlockMode.HARD).forEach { sites.add(it.url) }
+            }
+            
+            BlockerPreferences.updateCache(app, soft, hard, pkgs, sites)
+            if (soft || hard) {
+                BlockerForegroundService.start(app)
+            } else {
+                BlockerForegroundService.stop(app)
+            }
         }
     }
 
