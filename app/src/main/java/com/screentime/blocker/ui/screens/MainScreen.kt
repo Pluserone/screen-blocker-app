@@ -66,14 +66,14 @@ fun MainScreen(
                     .fillMaxWidth()
                     .padding(bottom = 12.dp),
                 shape = RoundedCornerShape(16.dp),
-                color = GlassBackground,
-                border = BorderStroke(1.dp, AccentRed)
+                color = GlassSurface,
+                border = BorderStroke(1.dp, HardRedAccent)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = "⚠️ Внимание: требуется разрешение",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = AccentRed
+                        color = HardRedAccent
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -87,7 +87,7 @@ fun MainScreen(
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             context.startActivity(intent)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
+                        colors = ButtonDefaults.buttonColors(containerColor = HardRedAccent),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
