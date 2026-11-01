@@ -1,16 +1,25 @@
 package com.screentime.blocker.ui.screens
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
+import android.text.TextUtils
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.screentime.blocker.data.local.ModeSettingsEntity
+import com.screentime.blocker.service.BlockerAccessibilityService
 import com.screentime.blocker.ui.theme.*
 
 @Composable
@@ -21,6 +30,21 @@ fun MainScreen(
     onNavigateToPasswordCheck: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var isAccessibilityEnabled by remember { mutableStateOf(checkAccessibilityEnabled(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isAccessibilityEnabled = checkAccessibilityEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -34,6 +58,48 @@ fun MainScreen(
             color = TextPrimary,
             modifier = Modifier.padding(vertical = 12.dp)
         )
+
+        // Баннер предупреждения, если спец. возможности не включены
+        if (!isAccessibilityEnabled) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = GlassBackground,
+                border = BorderStroke(1.dp, AccentRed)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "⚠️ Внимание: требуется разрешение",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = AccentRed
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Для блокировки приложений и сайтов включите службу «Screen Blocker» в спец. возможностях телефона.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            context.startActivity(intent)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Включить в настройках",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = TextPrimary
+                        )
+                    }
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -100,4 +166,21 @@ fun MainScreen(
             }
         }
     }
+}
+
+private fun checkAccessibilityEnabled(context: Context): Boolean {
+    val expectedServiceName = "${context.packageName}/${BlockerAccessibilityService::class.java.canonicalName}"
+    val settingValue = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+    val colonSplitter = TextUtils.SimpleStringSplitter(':')
+    colonSplitter.setString(settingValue)
+    while (colonSplitter.hasNext()) {
+        val componentName = colonSplitter.next()
+        if (componentName.equals(expectedServiceName, ignoreCase = true)) {
+            return true
+        }
+    }
+    return false
 }
