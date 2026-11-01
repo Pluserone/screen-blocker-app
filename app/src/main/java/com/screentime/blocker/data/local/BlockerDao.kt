@@ -17,6 +17,9 @@ interface BlockerDao {
     @Query("SELECT * FROM blocked_apps WHERE mode = :mode")
     fun getBlockedApps(mode: BlockMode): Flow<List<BlockedAppEntity>>
 
+    @Query("SELECT * FROM blocked_apps WHERE mode = :mode")
+    suspend fun getBlockedAppsList(mode: BlockMode): List<BlockedAppEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertApp(app: BlockedAppEntity)
 
@@ -25,6 +28,9 @@ interface BlockerDao {
 
     @Query("SELECT * FROM blocked_sites WHERE mode = :mode")
     fun getBlockedSites(mode: BlockMode): Flow<List<BlockedSiteEntity>>
+
+    @Query("SELECT * FROM blocked_sites WHERE mode = :mode")
+    suspend fun getBlockedSitesList(mode: BlockMode): List<BlockedSiteEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSite(site: BlockedSiteEntity)

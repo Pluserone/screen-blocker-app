@@ -7,22 +7,18 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.screentime.blocker.BlockerApp
 import com.screentime.blocker.data.local.BlockMode
-import com.screentime.blocker.data.local.BlockedAppEntity
-import com.screentime.blocker.data.local.BlockedSiteEntity
 import com.screentime.blocker.ui.BlockOverlayActivity
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 
 class BlockerAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Кэш заблокированных пакетов и сайтов
-    private var blockedPackages = mutableMapOf<String, String>() // packageName -> appName
-    private var blockedSites = mutableSetOf<String>()
+    @Volatile
+    private var blockedPackages = mapOf<String, String>() // packageName -> appName
+
+    @Volatile
+    private var blockedSites = setOf<String>()
 
     private val knownBrowserPackages = setOf(
         "com.android.chrome",
@@ -41,41 +37,40 @@ class BlockerAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         val dao = BlockerApp.instance.database.blockerDao()
 
-        // Подписываемся на изменения в БД
+        // Фоновый опрос базы данных для актуализации списка заблокированных приложений и сайтов
         serviceScope.launch {
-            combine(
-                dao.getSettingsFlow(BlockMode.SOFT),
-                dao.getSettingsFlow(BlockMode.HARD),
-                dao.getBlockedApps(BlockMode.SOFT),
-                dao.getBlockedApps(BlockMode.HARD),
-                dao.getBlockedSites(BlockMode.SOFT),
-                dao.getBlockedSites(BlockMode.HARD)
-            ) { softSet, hardSet, softApps, hardApps, softSites, hardSites ->
-                val newBlockedPkgs = mutableMapOf<String, String>()
-                val newBlockedSites = mutableSetOf<String>()
+            while (isActive) {
+                try {
+                    val softSet = dao.getSettings(BlockMode.SOFT)
+                    val hardSet = dao.getSettings(BlockMode.HARD)
 
-                if (softSet?.isLockActive == true) {
-                    softApps.filter { it.isSelected }.forEach {
-                        newBlockedPkgs[it.packageName] = it.appName
+                    val newBlockedPkgs = mutableMapOf<String, String>()
+                    val newBlockedSites = mutableSetOf<String>()
+
+                    if (softSet?.isLockActive == true) {
+                        dao.getBlockedAppsList(BlockMode.SOFT).filter { it.isSelected }.forEach {
+                            newBlockedPkgs[it.packageName] = it.appName
+                        }
+                        dao.getBlockedSitesList(BlockMode.SOFT).forEach {
+                            normalizeDomain(it.url)?.let { domain -> newBlockedSites.add(domain) }
+                        }
                     }
-                    softSites.forEach {
-                        normalizeDomain(it.url)?.let { domain -> newBlockedSites.add(domain) }
+
+                    if (hardSet?.isLockActive == true) {
+                        dao.getBlockedAppsList(BlockMode.HARD).filter { it.isSelected }.forEach {
+                            newBlockedPkgs[it.packageName] = it.appName
+                        }
+                        dao.getBlockedSitesList(BlockMode.HARD).forEach {
+                            normalizeDomain(it.url)?.let { domain -> newBlockedSites.add(domain) }
+                        }
                     }
+
+                    blockedPackages = newBlockedPkgs
+                    blockedSites = newBlockedSites
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-
-                if (hardSet?.isLockActive == true) {
-                    hardApps.filter { it.isSelected }.forEach {
-                        newBlockedPkgs[it.packageName] = it.appName
-                    }
-                    hardSites.forEach {
-                        normalizeDomain(it.url)?.let { domain -> newBlockedSites.add(domain) }
-                    }
-                }
-
-                newBlockedPkgs to newBlockedSites
-            }.collect { (pkgs, sites) ->
-                blockedPackages = pkgs
-                blockedSites = sites
+                delay(1200L)
             }
         }
     }
@@ -144,6 +139,11 @@ class BlockerAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceScope.cancel()
+    }
 
     companion object {
         fun isAccessibilityServiceEnabled(context: Context): Boolean {
