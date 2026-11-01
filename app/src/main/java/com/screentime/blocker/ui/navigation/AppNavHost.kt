@@ -1,12 +1,18 @@
 package com.screentime.blocker.ui.navigation
 
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.screentime.blocker.data.local.BlockMode
+import com.screentime.blocker.service.BlockerAccessibilityService
 import com.screentime.blocker.ui.screens.*
 import com.screentime.blocker.ui.viewmodel.BlockerViewModel
 
@@ -14,7 +20,9 @@ sealed class Screen(val route: String) {
     object Main : Screen("main")
     object SoftSettings : Screen("soft_settings")
     object HardSettings : Screen("hard_settings")
-    object PasswordCheck : Screen("password_check")
+    object PasswordCheck : Screen("password_check/{action}") {
+        fun createRoute(action: String) = "password_check/$action"
+    }
     object PasswordSetup : Screen("password_setup")
     object AppSelection : Screen("apps/{mode}") {
         fun createRoute(mode: BlockMode) = "apps/${mode.name}"
@@ -36,6 +44,25 @@ fun AppNavHost(viewModel: BlockerViewModel) {
     val navController = rememberNavController()
     val softSettings by viewModel.softSettings.collectAsState()
     val hardSettings by viewModel.hardSettings.collectAsState()
+    val context = LocalContext.current
+
+    fun promptAccessibilityIfNeeded() {
+        if (!BlockerAccessibilityService.isAccessibilityServiceEnabled(context)) {
+            Toast.makeText(
+                context,
+                "Включите службу «Screen Blocker» в спец. возможностях для блокировки!",
+                Toast.LENGTH_LONG
+            ).show()
+            try {
+                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                // Ignore if device doesn't support direct settings intent
+            }
+        }
+    }
 
     NavHost(navController = navController, startDestination = Screen.Main.route) {
         composable(Screen.Main.route) {
@@ -43,17 +70,29 @@ fun AppNavHost(viewModel: BlockerViewModel) {
                 hardSettings = hardSettings,
                 onNavigateToSoft = { navController.navigate(Screen.SoftSettings.route) },
                 onNavigateToHard = { navController.navigate(Screen.HardSettings.route) },
-                onNavigateToPasswordCheck = { navController.navigate(Screen.PasswordCheck.route) }
+                onNavigateToPasswordCheck = {
+                    navController.navigate(Screen.PasswordCheck.createRoute("enter"))
+                }
             )
         }
 
-        composable(Screen.PasswordCheck.route) {
+        composable(
+            route = Screen.PasswordCheck.route,
+            arguments = listOf(navArgument("action") { type = NavType.StringType; defaultValue = "enter" })
+        ) { backStackEntry ->
+            val action = backStackEntry.arguments?.getString("action") ?: "enter"
             PasswordInputScreen(
                 expectedPasswordHash = hardSettings.passwordHash,
                 onBack = { navController.popBackStack() },
                 onSuccess = {
-                    navController.popBackStack()
-                    navController.navigate(Screen.HardSettings.route)
+                    if (action == "stop") {
+                        viewModel.setLockActive(BlockMode.HARD, false)
+                        Toast.makeText(context, "Жесткая блокировка снята!", Toast.LENGTH_SHORT).show()
+                        navController.popBackStack()
+                    } else {
+                        navController.popBackStack()
+                        navController.navigate(Screen.HardSettings.route)
+                    }
                 }
             )
         }
@@ -73,9 +112,12 @@ fun AppNavHost(viewModel: BlockerViewModel) {
                             navController.navigate(Screen.BreathingSession.route)
                         } else {
                             viewModel.setLockActive(BlockMode.SOFT, false)
+                            Toast.makeText(context, "Мягкая блокировка остановлена", Toast.LENGTH_SHORT).show()
                         }
                     } else {
+                        promptAccessibilityIfNeeded()
                         viewModel.setLockActive(BlockMode.SOFT, true)
+                        Toast.makeText(context, "Мягкая блокировка запущена", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -93,28 +135,19 @@ fun AppNavHost(viewModel: BlockerViewModel) {
                 onValidateAndStart = {
                     val res = viewModel.canStartHardLock(hardSettings)
                     if (res.first) {
+                        promptAccessibilityIfNeeded()
                         viewModel.setLockActive(BlockMode.HARD, true)
+                        Toast.makeText(context, "Жесткая блокировка запущена!", Toast.LENGTH_SHORT).show()
                     }
                     res
                 },
                 onStopLock = {
                     if (hardSettings.isPasswordEnabled && !hardSettings.passwordHash.isNullOrBlank()) {
-                        navController.navigate(Screen.PasswordCheck.route)
+                        navController.navigate(Screen.PasswordCheck.createRoute("stop"))
                     } else {
                         viewModel.setLockActive(BlockMode.HARD, false)
+                        Toast.makeText(context, "Жесткая блокировка остановлена", Toast.LENGTH_SHORT).show()
                     }
-                }
-            )
-        }
-
-        composable(Screen.BreathingSession.route) {
-            ActiveBreathingSessionScreen(
-                durationMinutes = softSettings.breathDurationMinutes,
-                motivationText = softSettings.motivationText,
-                onBack = { navController.popBackStack() },
-                onFinishPracticeAndUnlock = {
-                    viewModel.setLockActive(BlockMode.SOFT, false)
-                    navController.popBackStack()
                 }
             )
         }
@@ -191,6 +224,19 @@ fun AppNavHost(viewModel: BlockerViewModel) {
                 initialMinutes = settings.breathDurationMinutes,
                 onBack = { navController.popBackStack() },
                 onSaveMinutes = { viewModel.setBreathDuration(mode, it) }
+            )
+        }
+
+        composable(Screen.BreathingSession.route) {
+            ActiveBreathingSessionScreen(
+                durationMinutes = softSettings.breathDurationMinutes,
+                motivationText = softSettings.motivationText,
+                onBack = { navController.popBackStack() },
+                onFinishPracticeAndUnlock = {
+                    viewModel.setLockActive(BlockMode.SOFT, false)
+                    Toast.makeText(context, "Мягкая блокировка успешно снята!", Toast.LENGTH_SHORT).show()
+                    navController.popBackStack()
+                }
             )
         }
     }

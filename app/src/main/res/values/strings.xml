@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Screen Blocker</string>
+    <string name="accessibility_desc">Служба Screen Blocker необходима для отслеживания и блокировки выбранных приложений и сайтов.</string>
 </resources>

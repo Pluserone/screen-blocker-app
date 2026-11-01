@@ -1,14 +1,18 @@
 package com.screentime.blocker.ui.screens
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.screentime.blocker.data.local.BlockMode
 import com.screentime.blocker.data.local.BlockedAppEntity
@@ -24,17 +28,34 @@ fun AppSelectionScreen(
     onToggleApp: (BlockedAppEntity) -> Unit,
     onUpdateLimit: (BlockedAppEntity, Int) -> Unit
 ) {
-    val defaultAppCatalog = remember {
-        listOf(
-            "com.google.android.youtube" to "Ютуб",
-            "com.zhiliaoapp.musically" to "тик Ток",
-            "org.telegram.messenger" to "телеграмм",
-            "com.example.smile" to "смайлик",
-            "com.example.other" to "и так далее",
-            "com.google.android.googlequicksearchbox" to "гугл",
-            "com.shopping.app" to "покупки",
-            "com.game.app" to "игры"
-        )
+    val context = LocalContext.current
+    val pm = context.packageManager
+
+    // Считываем только реальные приложения, установленные на телефоне пользователя
+    val installedApps = remember {
+        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+        resolveInfos.mapNotNull { ri ->
+            val pkg = ri.activityInfo.packageName
+            if (pkg == context.packageName) null
+            else {
+                val label = ri.loadLabel(pm).toString()
+                pkg to label
+            }
+        }.distinctBy { it.first }
+         .sortedBy { it.second.lowercase() }
+    }
+
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredApps = remember(searchQuery, installedApps) {
+        if (searchQuery.isBlank()) installedApps
+        else installedApps.filter {
+            it.second.contains(searchQuery, ignoreCase = true) ||
+            it.first.contains(searchQuery, ignoreCase = true)
+        }
     }
 
     val selectedMap = remember(blockedApps) {
@@ -56,11 +77,40 @@ fun AppSelectionScreen(
         ) {
             ScreenHeader(title = "Выберите приложения", onBack = onBack)
 
+            // Поисковая строка для удобного поиска среди установленных приложений
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = {
+                        Text(
+                            text = "Поиск среди установленных приложений...",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = TextSecondary
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Поиск",
+                            tint = TextSecondary
+                        )
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(defaultAppCatalog) { (pkg, name) ->
+                items(filteredApps, key = { it.first }) { (pkg, name) ->
                     val appEntity = selectedMap[pkg] ?: BlockedAppEntity(
                         mode = mode,
                         packageName = pkg,
