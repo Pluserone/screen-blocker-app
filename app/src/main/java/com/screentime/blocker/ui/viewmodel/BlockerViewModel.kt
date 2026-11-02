@@ -73,51 +73,64 @@ class BlockerViewModel(private val dao: BlockerDao) : ViewModel() {
             } else {
                 dao.upsertApp(app.copy(isSelected = true))
             }
+            syncCache()
         }
     }
 
     fun updateAppLimit(mode: BlockMode, app: BlockedAppEntity, newLimit: Int) {
         viewModelScope.launch {
             dao.upsertApp(app.copy(dailyLimitMinutes = newLimit))
+            syncCache()
         }
     }
 
     fun addSite(mode: BlockMode, url: String) {
         viewModelScope.launch {
             if (url.isNotBlank()) dao.insertSite(BlockedSiteEntity(mode = mode, url = url.trim()))
+            syncCache()
         }
     }
 
     fun removeSite(site: BlockedSiteEntity) {
-        viewModelScope.launch { dao.deleteSite(site) }
+        viewModelScope.launch {
+            dao.deleteSite(site)
+            syncCache()
+        }
     }
 
     fun setLockActive(mode: BlockMode, active: Boolean) {
         viewModelScope.launch {
             val current = dao.getSettings(mode) ?: ModeSettingsEntity(mode = mode)
             dao.saveSettings(current.copy(isLockActive = active))
-            
-            val app = BlockerApp.instance
-            val soft = if (mode == BlockMode.SOFT) active else (dao.getSettings(BlockMode.SOFT)?.isLockActive == true)
-            val hard = if (mode == BlockMode.HARD) active else (dao.getSettings(BlockMode.HARD)?.isLockActive == true)
-            
-            val pkgs = mutableMapOf<String, String>()
-            val sites = mutableSetOf<String>()
-            if (soft) {
-                dao.getBlockedAppsList(BlockMode.SOFT).filter { it.isSelected }.forEach { pkgs[it.packageName] = it.appName }
-                dao.getBlockedSitesList(BlockMode.SOFT).forEach { sites.add(it.url) }
+            syncCache()
+        }
+    }
+
+    private suspend fun syncCache() {
+        val app = BlockerApp.instance
+        val soft = dao.getSettings(BlockMode.SOFT)?.isLockActive == true
+        val hard = dao.getSettings(BlockMode.HARD)?.isLockActive == true
+
+        val pkgs = mutableMapOf<String, CachedAppLimit>()
+        val sites = mutableSetOf<String>()
+        if (soft) {
+            dao.getBlockedAppsList(BlockMode.SOFT).filter { it.isSelected }.forEach {
+                pkgs[it.packageName] = CachedAppLimit(it.appName, it.dailyLimitMinutes)
             }
-            if (hard) {
-                dao.getBlockedAppsList(BlockMode.HARD).filter { it.isSelected }.forEach { pkgs[it.packageName] = it.appName }
-                dao.getBlockedSitesList(BlockMode.HARD).forEach { sites.add(it.url) }
+            dao.getBlockedSitesList(BlockMode.SOFT).forEach { sites.add(it.url) }
+        }
+        if (hard) {
+            dao.getBlockedAppsList(BlockMode.HARD).filter { it.isSelected }.forEach {
+                pkgs[it.packageName] = CachedAppLimit(it.appName, it.dailyLimitMinutes)
             }
-            
-            BlockerPreferences.updateCache(app, soft, hard, pkgs, sites)
-            if (soft || hard) {
-                BlockerForegroundService.start(app)
-            } else {
-                BlockerForegroundService.stop(app)
-            }
+            dao.getBlockedSitesList(BlockMode.HARD).forEach { sites.add(it.url) }
+        }
+
+        BlockerPreferences.updateCache(app, soft, hard, pkgs, sites)
+        if (soft || hard) {
+            BlockerForegroundService.start(app)
+        } else {
+            BlockerForegroundService.stop(app)
         }
     }
 

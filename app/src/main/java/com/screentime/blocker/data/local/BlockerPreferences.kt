@@ -3,6 +3,11 @@ package com.screentime.blocker.data.local
 import android.content.Context
 import android.content.SharedPreferences
 
+data class CachedAppLimit(
+    val appName: String,
+    val limitMinutes: Int
+)
+
 object BlockerPreferences {
     private const val PREFS_NAME = "screen_blocker_fast_cache"
     private const val KEY_SOFT_ACTIVE = "key_soft_active"
@@ -18,11 +23,13 @@ object BlockerPreferences {
         context: Context,
         isSoftActive: Boolean,
         isHardActive: Boolean,
-        blockedPackagesMap: Map<String, String>, // pkg -> name
+        blockedPackagesMap: Map<String, CachedAppLimit>, // pkg -> (appName, limitMinutes)
         blockedSitesSet: Set<String>
     ) {
         val prefs = getPrefs(context)
-        val pkgsSerialized = blockedPackagesMap.entries.joinToString("|||") { "${it.key}:::${it.value}" }
+        val pkgsSerialized = blockedPackagesMap.entries.joinToString("|||") {
+            "${it.key}:::${it.value.appName}:::${it.value.limitMinutes}"
+        }
         val sitesSerialized = blockedSitesSet.joinToString("|||")
 
         prefs.edit()
@@ -30,7 +37,7 @@ object BlockerPreferences {
             .putBoolean(KEY_HARD_ACTIVE, isHardActive)
             .putString(KEY_BLOCKED_PACKAGES, pkgsSerialized)
             .putString(KEY_BLOCKED_SITES, sitesSerialized)
-            .apply()
+            .commit() // commit синхронно для надежности
     }
 
     fun isAnyLockActive(context: Context): Boolean {
@@ -42,12 +49,21 @@ object BlockerPreferences {
         return getPrefs(context).getBoolean(KEY_HARD_ACTIVE, false)
     }
 
-    fun getBlockedPackages(context: Context): Map<String, String> {
+    fun getBlockedPackages(context: Context): Map<String, CachedAppLimit> {
         val raw = getPrefs(context).getString(KEY_BLOCKED_PACKAGES, "") ?: ""
         if (raw.isBlank()) return emptyMap()
-        return raw.split("|||").mapNotNull {
-            val parts = it.split(":::")
-            if (parts.size == 2) parts[0] to parts[1] else null
+        return raw.split("|||").mapNotNull { entry ->
+            val parts = entry.split(":::")
+            if (parts.size >= 3) {
+                val pkg = parts[0]
+                val name = parts[1]
+                val limit = parts[2].toIntOrNull() ?: 0
+                pkg to CachedAppLimit(name, limit)
+            } else if (parts.size == 2) {
+                val pkg = parts[0]
+                val name = parts[1]
+                pkg to CachedAppLimit(name, 0)
+            } else null
         }.toMap()
     }
 

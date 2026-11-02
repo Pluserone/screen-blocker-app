@@ -146,8 +146,10 @@ fun AppSelectionScreen(
                                 InlineNumberStepper(
                                     value = appEntity.dailyLimitMinutes,
                                     onValueChange = { onUpdateLimit(appEntity, it) },
-                                    step = 10,
-                                    isInfinityAllowed = true
+                                    step = 1,
+                                    min = 0,
+                                    isInfinityAllowed = true,
+                                    suffix = "мин"
                                 )
                             }
                         }

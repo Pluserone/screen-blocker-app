@@ -8,6 +8,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.screentime.blocker.BlockerApp
 import com.screentime.blocker.data.local.BlockMode
 import com.screentime.blocker.data.local.BlockerPreferences
+import com.screentime.blocker.data.local.CachedAppLimit
+import com.screentime.blocker.data.local.UsageTracker
 import com.screentime.blocker.ui.BlockOverlayActivity
 import kotlinx.coroutines.*
 
@@ -16,10 +18,13 @@ class BlockerAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     @Volatile
-    private var blockedPackages = mapOf<String, String>() // packageName -> appName
+    private var blockedPackages = mapOf<String, CachedAppLimit>() // packageName -> CachedAppLimit
 
     @Volatile
     private var blockedSites = setOf<String>()
+
+    @Volatile
+    private var activeForegroundPackage: String? = null
 
     private val knownBrowserPackages = setOf(
         "com.android.chrome",
@@ -36,9 +41,9 @@ class BlockerAccessibilityService : AccessibilityService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Мгновенная загрузка из быстрого кэша еще до первого события
         blockedPackages = BlockerPreferences.getBlockedPackages(this)
         blockedSites = BlockerPreferences.getBlockedSites(this)
+        startUsageTicker()
     }
 
     override fun onServiceConnected() {
@@ -46,7 +51,6 @@ class BlockerAccessibilityService : AccessibilityService() {
         blockedPackages = BlockerPreferences.getBlockedPackages(this)
         blockedSites = BlockerPreferences.getBlockedSites(this)
 
-        // Фоновый опрос базы данных для актуализации
         serviceScope.launch {
             val dao = BlockerApp.instance.database.blockerDao()
             while (isActive) {
@@ -57,12 +61,12 @@ class BlockerAccessibilityService : AccessibilityService() {
                     val isSoftActive = softSet?.isLockActive == true
                     val isHardActive = hardSet?.isLockActive == true
 
-                    val newBlockedPkgs = mutableMapOf<String, String>()
+                    val newBlockedPkgs = mutableMapOf<String, CachedAppLimit>()
                     val newBlockedSites = mutableSetOf<String>()
 
                     if (isSoftActive) {
                         dao.getBlockedAppsList(BlockMode.SOFT).filter { it.isSelected }.forEach {
-                            newBlockedPkgs[it.packageName] = it.appName
+                            newBlockedPkgs[it.packageName] = CachedAppLimit(it.appName, it.dailyLimitMinutes)
                         }
                         dao.getBlockedSitesList(BlockMode.SOFT).forEach {
                             normalizeDomain(it.url)?.let { domain -> newBlockedSites.add(domain) }
@@ -71,7 +75,7 @@ class BlockerAccessibilityService : AccessibilityService() {
 
                     if (isHardActive) {
                         dao.getBlockedAppsList(BlockMode.HARD).filter { it.isSelected }.forEach {
-                            newBlockedPkgs[it.packageName] = it.appName
+                            newBlockedPkgs[it.packageName] = CachedAppLimit(it.appName, it.dailyLimitMinutes)
                         }
                         dao.getBlockedSitesList(BlockMode.HARD).forEach {
                             normalizeDomain(it.url)?.let { domain -> newBlockedSites.add(domain) }
@@ -81,7 +85,6 @@ class BlockerAccessibilityService : AccessibilityService() {
                     blockedPackages = newBlockedPkgs
                     blockedSites = newBlockedSites
 
-                    // Сохраняем в мгновенный постоянный кэш
                     BlockerPreferences.updateCache(
                         this@BlockerAccessibilityService,
                         isSoftActive = isSoftActive,
@@ -90,7 +93,6 @@ class BlockerAccessibilityService : AccessibilityService() {
                         blockedSitesSet = newBlockedSites
                     )
 
-                    // Если любая блокировка активна — держим Foreground Service активным
                     if (isSoftActive || isHardActive) {
                         BlockerForegroundService.start(this@BlockerAccessibilityService)
                     }
@@ -102,26 +104,59 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun startUsageTicker() {
+        serviceScope.launch {
+            while (isActive) {
+                delay(1000L)
+                val currentPkg = activeForegroundPackage ?: continue
+                val limitInfo = blockedPackages[currentPkg] ?: continue
+
+                // Если установлен лимит в минутах (> 0), отсчитываем реальное время использования
+                if (limitInfo.limitMinutes > 0) {
+                    UsageTracker.addUsageSeconds(this@BlockerAccessibilityService, currentPkg, 1L)
+
+                    if (UsageTracker.isAppLimitExceeded(this@BlockerAccessibilityService, currentPkg, limitInfo.limitMinutes)) {
+                        activeForegroundPackage = null
+                        withContext(Dispatchers.Main) {
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                            BlockOverlayActivity.start(
+                                this@BlockerAccessibilityService,
+                                title = limitInfo.appName,
+                                subtitle = "Дневной лимит (${limitInfo.limitMinutes} мин) исчерпан!"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val currentPackage = event.packageName?.toString() ?: return
 
-        // Игнорируем лаунчер рабочего стола, системную шторку и наше собственное приложение
+        // Системный лаунчер, шторка, наше приложение
         if (currentPackage == packageName ||
             currentPackage == "com.android.systemui" ||
             currentPackage == "com.miui.home" ||
             currentPackage == "com.google.android.apps.nexuslauncher"
         ) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                activeForegroundPackage = null
+            }
             return
         }
 
-        // Если кэш в памяти пуст, немедленно перечитываем быстрый кэш
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            activeForegroundPackage = currentPackage
+        }
+
         if (blockedPackages.isEmpty()) {
             blockedPackages = BlockerPreferences.getBlockedPackages(this)
             blockedSites = BlockerPreferences.getBlockedSites(this)
         }
 
-        // 1. Защита от обхода через Настройки в режиме жесткой блокировки
+        // 1. Защита от обхода настроек в режиме жесткой блокировки
         if (BlockerPreferences.isHardLockActive(this) && currentPackage == "com.android.settings") {
             val rootNode = rootInActiveWindow
             if (isSettingsBypassAttempt(rootNode)) {
@@ -129,7 +164,7 @@ class BlockerAccessibilityService : AccessibilityService() {
                 BlockOverlayActivity.start(
                     this,
                     title = "Настройки заблокированы",
-                    subtitle = "В режиме жесткой блокировки доступ к изменению системных разрешений закрыт"
+                    subtitle = "В режиме жесткой блокировки доступ к настройкам закрыт"
                 )
                 return
             }
@@ -137,17 +172,35 @@ class BlockerAccessibilityService : AccessibilityService() {
 
         // 2. Проверка блокировки приложений
         if (blockedPackages.containsKey(currentPackage)) {
-            val appName = blockedPackages[currentPackage] ?: "Приложение"
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            BlockOverlayActivity.start(
-                this,
-                title = appName,
-                subtitle = "Доступ к этому приложению ограничен"
-            )
-            return
+            val limitInfo = blockedPackages[currentPackage]!!
+
+            // Если лимит 0 мин — блокируем сразу
+            if (limitInfo.limitMinutes == 0) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                BlockOverlayActivity.start(
+                    this,
+                    title = limitInfo.appName,
+                    subtitle = "Доступ к этому приложению ограничен"
+                )
+                return
+            }
+
+            // Если лимит > 0 мин — проверяем, исчерпан ли лимит
+            if (limitInfo.limitMinutes > 0) {
+                if (UsageTracker.isAppLimitExceeded(this, currentPackage, limitInfo.limitMinutes)) {
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    BlockOverlayActivity.start(
+                        this,
+                        title = limitInfo.appName,
+                        subtitle = "Дневной лимит (${limitInfo.limitMinutes} мин) исчерпан!"
+                    )
+                    return
+                }
+                // Если лимит еще не исчерпан — разрешаем пользоваться!
+            }
         }
 
-        // 3. Проверка блокировки сайтов в браузерах
+        // 3. Проверка блокировки сайтов
         if (blockedSites.isNotEmpty() && knownBrowserPackages.contains(currentPackage)) {
             val rootNode = rootInActiveWindow ?: return
             checkBrowserUrlRecursively(rootNode)
