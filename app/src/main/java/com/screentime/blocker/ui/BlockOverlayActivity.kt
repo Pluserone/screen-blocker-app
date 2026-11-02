@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -20,6 +21,15 @@ class BlockOverlayActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val title = intent.getStringExtra(EXTRA_TITLE) ?: "Доступ заблокирован"
         val subtitle = intent.getStringExtra(EXTRA_SUBTITLE) ?: "Действуют ограничения экранного времени"
+
+        onBackPressedDispatcher.addCallback(this) {
+            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(homeIntent)
+            finish()
+        }
 
         setContent {
             AppTheme {

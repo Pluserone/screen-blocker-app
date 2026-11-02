@@ -112,6 +112,14 @@ class BlockerForegroundService : Service() {
         if (now - lastBlockedLaunchTime < 800) return
         lastBlockedLaunchTime = now
 
+        // 1. Немедленно сворачиваем запрещенное приложение на рабочий стол
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        startActivity(homeIntent)
+
+        // 2. Показываем экран блокировки
         val blockIntent = Intent(this, BlockOverlayActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(BlockOverlayActivity.EXTRA_TITLE, appName)

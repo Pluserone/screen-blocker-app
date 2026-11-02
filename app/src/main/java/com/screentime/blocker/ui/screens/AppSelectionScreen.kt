@@ -115,7 +115,7 @@ fun AppSelectionScreen(
                         mode = mode,
                         packageName = pkg,
                         appName = name,
-                        dailyLimitMinutes = 30,
+                        dailyLimitMinutes = 0,
                         isSelected = false
                     )
 
