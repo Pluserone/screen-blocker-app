@@ -19,11 +19,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.screentime.blocker.data.local.ModeSettingsEntity
+import com.screentime.blocker.data.local.UsageTracker
 import com.screentime.blocker.service.BlockerAccessibilityService
 import com.screentime.blocker.ui.theme.*
 
 @Composable
 fun MainScreen(
+    softSettings: ModeSettingsEntity,
     hardSettings: ModeSettingsEntity,
     onNavigateToSoft: () -> Unit,
     onNavigateToHard: () -> Unit,
@@ -33,11 +35,13 @@ fun MainScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var isAccessibilityEnabled by remember { mutableStateOf(checkAccessibilityEnabled(context)) }
+    var isUsageAccessEnabled by remember { mutableStateOf(UsageTracker.hasUsageStatsPermission(context)) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = checkAccessibilityEnabled(context)
+                isUsageAccessEnabled = UsageTracker.hasUsageStatsPermission(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -71,13 +75,13 @@ fun MainScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "⚠️ Внимание: требуется разрешение",
+                        text = "⚠️ Внимание: требуется спец. возможность",
                         style = MaterialTheme.typography.bodyLarge,
                         color = HardRedAccent
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Для блокировки приложений и сайтов включите службу «Screen Blocker» в спец. возможностях телефона.",
+                        text = "Для мгновенной блокировки включите службу «Screen Blocker» в спец. возможностях телефона.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = TextSecondary
                     )
@@ -92,7 +96,49 @@ fun MainScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "Включить в настройках",
+                            text = "Включить спец. возможности",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = TextPrimary
+                        )
+                    }
+                }
+            }
+        }
+
+        // Баннер предупреждения, если доступ к данным об использовании не включен (для 24/7 работы)
+        if (!isUsageAccessEnabled) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = GlassSurface,
+                border = BorderStroke(1.dp, HardRedAccent)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "⚙️ Требуется доступ к использованию (24/7)",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = HardRedAccent
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Чтобы блокировка не отключалась при очистке памяти и работала 24/7, разрешите доступ к данным использования.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                            context.startActivity(intent)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = HardRedAccent),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Разрешить доступ к использованию",
                             style = MaterialTheme.typography.bodyLarge,
                             color = TextPrimary
                         )
@@ -114,11 +160,22 @@ fun MainScreen(
                 }
             }
         ) {
-            Text(
-                text = "⚡ Агрессивная блокировка",
-                style = MaterialTheme.typography.bodyLarge,
-                color = TextPrimary
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "⚡ Агрессивная блокировка",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = TextPrimary
+                )
+                Text(
+                    text = if (hardSettings.isLockActive) "активна" else "выключена",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (hardSettings.isLockActive) HardRedAccent else TextSecondary
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "Блокировка ставится на определенное время и ее нельзя снять\nэтот вид блокировки рекомендуется ставить на развлекательные приложения от которых есть сильная зависимость...",
@@ -134,11 +191,29 @@ fun MainScreen(
             modifier = Modifier.fillMaxWidth(),
             onClick = onNavigateToSoft
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "🛡️ Мягкая блокировка",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = TextPrimary
+                )
+                Text(
+                    text = if (softSettings.isLockActive) "активна" else "выключена",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (softSettings.isLockActive) SoftGreenAccent else TextSecondary
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "🛡️ Мягкая блокировка",
+                text = "Блокировку можно снять в любое время\nэтот вид блокировки рекомендуется ставить на мессенджеры и другие важные приложения от которых нет сильной зависимости...",
                 style = MaterialTheme.typography.bodyLarge,
-                color = TextPrimary
+                color = TextSecondary
             )
+        }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "Блокировку можно снять в любое время\nэтот вид блокировки рекомендуется ставить на мессенджеры и другие важные приложения от которых нет сильной зависимости...",

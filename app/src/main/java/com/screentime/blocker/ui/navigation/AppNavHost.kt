@@ -67,6 +67,7 @@ fun AppNavHost(viewModel: BlockerViewModel) {
     NavHost(navController = navController, startDestination = Screen.Main.route) {
         composable(Screen.Main.route) {
             MainScreen(
+                softSettings = softSettings,
                 hardSettings = hardSettings,
                 onNavigateToSoft = { navController.navigate(Screen.SoftSettings.route) },
                 onNavigateToHard = { navController.navigate(Screen.HardSettings.route) },

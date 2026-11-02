@@ -70,6 +70,11 @@ object UsageTracker {
         prefs.edit().putLong(key, current + secondsToAdd).apply()
     }
 
+    fun resetTodayUsage(context: Context) {
+        val prefs = context.getSharedPreferences("app_usage_timer", Context.MODE_PRIVATE)
+        prefs.edit().clear().apply()
+    }
+
     fun isAppLimitExceeded(context: Context, packageName: String, limitMinutes: Int): Boolean {
         // -1 означает бесконечность (без лимита)
         if (limitMinutes < 0) return false

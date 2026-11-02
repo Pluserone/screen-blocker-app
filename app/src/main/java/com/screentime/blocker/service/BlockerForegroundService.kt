@@ -1,6 +1,8 @@
 package com.screentime.blocker.service
 
 import android.app.*
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -9,8 +11,15 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.screentime.blocker.MainActivity
 import com.screentime.blocker.data.local.BlockerPreferences
+import com.screentime.blocker.data.local.UsageTracker
+import com.screentime.blocker.ui.BlockOverlayActivity
+import kotlinx.coroutines.*
 
 class BlockerForegroundService : Service() {
+
+    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var isLoopRunning = false
+    private var lastBlockedLaunchTime = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -20,7 +29,7 @@ class BlockerForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val isLockActive = BlockerPreferences.isAnyLockActive(this)
         val title = if (isLockActive) "🛡️ Screen Blocker: Защита активна" else "🛡️ Screen Blocker работает в фоне"
-        val text = if (isLockActive) "Блокировка приложений и сайтов включена" else "Служба готова к блокировке"
+        val text = if (isLockActive) "Блокировка 24/7 приложений и сайтов включена" else "Служба готова к блокировке"
 
         val notification = buildNotification(title, text)
 
@@ -34,7 +43,97 @@ class BlockerForegroundService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
+        if (!isLoopRunning) {
+            start24x7MonitoringLoop()
+        }
+
         return START_STICKY
+    }
+
+    /**
+     * Непрерывный цикл 24/7, работающий параллельно с AccessibilityService.
+     * Даже если система временно усыпит спец. возможности при смахивании,
+     * эта служба с наивысшим приоритетом процесса перехватывает приложения каждые 400мс.
+     */
+    private fun start24x7MonitoringLoop() {
+        isLoopRunning = true
+        serviceScope.launch {
+            while (isActive) {
+                try {
+                    if (BlockerPreferences.isAnyLockActive(this@BlockerForegroundService)) {
+                        checkTopAppAndEnforceBlock()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                delay(400L)
+            }
+        }
+    }
+
+    private fun checkTopAppAndEnforceBlock() {
+        val topPackage = getForegroundPackage(this) ?: return
+
+        // Системные пакеты, лаунчер и само приложение не трогаем
+        if (topPackage == packageName ||
+            topPackage == "com.android.systemui" ||
+            topPackage == "com.miui.home" ||
+            topPackage == "com.google.android.apps.nexuslauncher"
+        ) {
+            return
+        }
+
+        val blockedMap = BlockerPreferences.getBlockedPackages(this)
+        val limitInfo = blockedMap[topPackage] ?: return
+
+        // 1. Лимит 0 минут — мгновенная блокировка 24/7
+        if (limitInfo.limitMinutes == 0) {
+            triggerBlock(limitInfo.appName, "Доступ к этому приложению ограничен")
+            return
+        }
+
+        // 2. Лимит в минутах (> 0)
+        if (limitInfo.limitMinutes > 0) {
+            // Засчитываем секунду использования
+            UsageTracker.addUsageSeconds(this, topPackage, 1L)
+
+            if (UsageTracker.isAppLimitExceeded(this, topPackage, limitInfo.limitMinutes)) {
+                triggerBlock(
+                    limitInfo.appName,
+                    "Дневной лимит (${limitInfo.limitMinutes} мин) исчерпан!"
+                )
+            }
+        }
+    }
+
+    private fun triggerBlock(appName: String, subtitle: String) {
+        val now = System.currentTimeMillis()
+        // Предотвращаем спам Intent-ами чаще чем раз в 800мс
+        if (now - lastBlockedLaunchTime < 800) return
+        lastBlockedLaunchTime = now
+
+        val blockIntent = Intent(this, BlockOverlayActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(BlockOverlayActivity.EXTRA_TITLE, appName)
+            putExtra(BlockOverlayActivity.EXTRA_SUBTITLE, subtitle)
+        }
+        startActivity(blockIntent)
+    }
+
+    private fun getForegroundPackage(context: Context): String? {
+        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return null
+        val time = System.currentTimeMillis()
+        val usageEvents = usm.queryEvents(time - 8000, time) ?: return null
+        val event = UsageEvents.Event()
+        var lastResumedPackage: String? = null
+
+        while (usageEvents.hasNextEvent()) {
+            usageEvents.getNextEvent(event)
+            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
+                lastResumedPackage = event.packageName
+            }
+        }
+        return lastResumedPackage
     }
 
     private fun buildNotification(title: String, text: String): Notification {
@@ -66,7 +165,7 @@ class BlockerForegroundService : Service() {
                 "Screen Blocker Защита",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Постоянное уведомление для защиты от закрытия блокировки"
+                description = "Постоянное уведомление для защиты 24/7 от закрытия блокировки"
                 setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
@@ -76,7 +175,6 @@ class BlockerForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // Если пользователь смахнул приложение из недавних, перезапускаем службу
         val restartIntent = Intent(applicationContext, BlockerForegroundService::class.java)
         val pendingIntent = PendingIntent.getService(
             applicationContext,
@@ -87,9 +185,15 @@ class BlockerForegroundService : Service() {
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager
         alarmManager?.set(
             AlarmManager.RTC,
-            System.currentTimeMillis() + 500,
+            System.currentTimeMillis() + 300,
             pendingIntent
         )
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceScope.cancel()
+        isLoopRunning = false
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

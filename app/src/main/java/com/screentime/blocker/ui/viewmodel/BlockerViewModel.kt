@@ -102,6 +102,9 @@ class BlockerViewModel(private val dao: BlockerDao) : ViewModel() {
         viewModelScope.launch {
             val current = dao.getSettings(mode) ?: ModeSettingsEntity(mode = mode)
             dao.saveSettings(current.copy(isLockActive = active))
+            if (active) {
+                UsageTracker.resetTodayUsage(BlockerApp.instance)
+            }
             syncCache()
         }
     }
