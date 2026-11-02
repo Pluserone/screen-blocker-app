@@ -214,13 +214,6 @@ fun MainScreen(
                 color = TextSecondary
             )
         }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Блокировку можно снять в любое время\nэтот вид блокировки рекомендуется ставить на мессенджеры и другие важные приложения от которых нет сильной зависимости...",
-                style = MaterialTheme.typography.bodyLarge,
-                color = TextSecondary
-            )
-        }
 
         Spacer(modifier = Modifier.weight(1f))
 
